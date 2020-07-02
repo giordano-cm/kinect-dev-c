@@ -34,7 +34,7 @@
 #define KINECT_ANGLE_DIR_UP         0
 #define KINECT_ANGLE_DIR_DOWN       1
 #define INITIAL_KINECT_ANGLE_DIR    KINECT_ANGLE_DIR_UP
-#define NUM_OF_SEMI_CYCLES          3
+#define NUM_OF_SEMI_CYCLES          1
 
 #define FILE_NAME           "linear_scanner.txt"
 #define FILE_HEADER_STR     "index,depth_value,angle,direction"
@@ -209,10 +209,14 @@ void KINECT__Depth_Callback(freenect_device * dvc, void * v_depth, uint32_t time
 {
     static uint8_t i = 0;
     uint16_t * depth = (uint16_t *)v_depth;
+    float tmp = 0;
 
-    FILE__Write( depth );
+    /* De acordo com <https://openkinect.org/wiki/Imaging_Information>, na seção Depth Camera */
+    tmp = (float)(100/((-0.00307 * (depth[640*480/2])) + 3.33));
 
-    printf("\nEntrou CALLBACK %u vez(es) | depth: %u", (++i), depth[1]);
+    FILE__Write( (float *)(&tmp) );
+
+    printf("\nEntrou CALLBACK %u vez(es) | depth: %f", (++i), tmp);
     fflush(stdout);
 }
 
@@ -238,6 +242,7 @@ void FILE__Write( void * data )
 {
 	FILE * fp = NULL;           /* Criação e escrita em arquivo */
 	static uint32_t index = 0;
+	float * data_ = (float *)data;
 
     /* Abre o arquivo para ler */
 	fp = fopen(FILE_NAME, "r");
@@ -254,7 +259,7 @@ void FILE__Write( void * data )
         fp = fopen(FILE_NAME, "a");
 	}
 
-    fprintf(fp, "\n%u,%d,%i,%d", index++, *(uint16_t *)data, Device_Angle, Device_Angle_Direction);
+    fprintf(fp, "\n%u,%f,%i,%d", index++, *data_, Device_Angle, Device_Angle_Direction);
 
     /* Fecha o arquivo */
 	fclose(fp);
