@@ -38,7 +38,7 @@
 #define RES_NUM_OF_COLUMNS_PX       640
 #define MIDDLE_POINT_OF_CAMERA      (((RES_NUM_OF_COLUMNS_PX/2)-1)+(((RES_NUM_OF_LINES_PX/2)-1)*RES_NUM_OF_COLUMNS_PX))
 
-#define FILE_NAME           "linear_scanner.txt"
+#define FILE_NAME           "linear_scanner.csv"
 #define FILE_HEADER_STR     "index,depth_value,angle,direction"
 
 //========================================================================
