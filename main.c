@@ -21,7 +21,6 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <signal.h>
 #include <libfreenect.h>
 #include <libfreenect_sync.h>
 
@@ -29,12 +28,15 @@
 //  Defines
 //========================================================================
 #define MY_KINECT_INDEX             0   /* Apenas 1 kinkect sendo utilizado */
-#define TIME_TO_WAIT_US             1000000
+#define TIME_TO_WAIT_US             10000
 #define INITIAL_KINECT_MOTOR_ANGLE  (-30)
 #define KINECT_ANGLE_DIR_UP         0
 #define KINECT_ANGLE_DIR_DOWN       1
 #define INITIAL_KINECT_ANGLE_DIR    KINECT_ANGLE_DIR_UP
 #define NUM_OF_SEMI_CYCLES          1
+#define RES_NUM_OF_LINES_PX         480
+#define RES_NUM_OF_COLUMNS_PX       640
+#define MIDDLE_POINT_OF_CAMERA      (((RES_NUM_OF_COLUMNS_PX/2)-1)+(((RES_NUM_OF_LINES_PX/2)-1)*RES_NUM_OF_COLUMNS_PX))
 
 #define FILE_NAME           "linear_scanner.txt"
 #define FILE_HEADER_STR     "index,depth_value,angle,direction"
@@ -42,23 +44,21 @@
 //========================================================================
 //  Global Variables
 //========================================================================
-freenect_context * fn_ctx = NULL;
-freenect_device * fn_dvc = NULL;
 uint8_t Semi_Cycles = 0;
 freenect_raw_tilt_state * Device_State = NULL;
 int8_t Device_Angle = INITIAL_KINECT_MOTOR_ANGLE;           /* de {-30,-29,-28,...,+28,+29,+30}  */
 uint8_t Device_Angle_Direction = INITIAL_KINECT_ANGLE_DIR;  /* 0 - sobe(aumenta); 1 - desce(diminui) */
-//uint8_t * depth = NULL;                                       /* Profundidade */
+uint8_t Flag__Release = 0;
+short * Depth = NULL;
+uint32_t Timestamp = 0;
 
 //========================================================================
 //  Functions Prototypes
 //========================================================================
 void KINECT__Init();
-void KINECT__Depth_Callback(freenect_device * dvc, void * v_depth, uint32_t timestamp);
-void KINECT__Deinit();
 void FILE__Write( void * data );
-//void INThandler(int sig);
 void APP__Init();
+void APP__Thread( void * arg );
 void APP__Deinit();
 
 /*
@@ -68,28 +68,92 @@ void APP__Deinit();
 */
 int main()
 {
-    /* Declarando as variáveis */
-	int ret = 0;                /* Verificações de retornos de funções */
-
-    /* Inicializa o Kinect */
+    /* Inicializa a aplicação */
     APP__Init();
 
+    /* Criação de threads */
+    APP__Thread(NULL);
+
+    /* Encerra o Kinect */
+    APP__Deinit();
+
+    printf("\n");
+    return EXIT_SUCCESS;
+}
+
+/*
+    KINECT__Init
+    Giordano C Moro
+    28/06/2020
+*/
+void KINECT__Init()
+{
+    /* Sets iniciais */
+    freenect_sync_set_tilt_degs(INITIAL_KINECT_MOTOR_ANGLE, MY_KINECT_INDEX);
+	freenect_sync_set_led(LED_GREEN, MY_KINECT_INDEX);
+
+    /* Espera o KINECT terminar o movimento */
+    do
+    {
+        freenect_sync_get_tilt_state(&Device_State, MY_KINECT_INDEX);
+    } while ( Device_State->tilt_status == TILT_STATUS_MOVING );
+}
+
+/*
+    FILE__Write
+    Giordano C Moro
+    28/06/2020
+*/
+void FILE__Write( void * data )
+{
+	FILE * fp = NULL;           /* Criação e escrita em arquivo */
+	static uint32_t index = 0;
+	short * data_ = (short *)data;
+
+    /* Abre o arquivo para ler */
+	fp = fopen(FILE_NAME, "r");
+
+	/* Caso o arquivo não existe, é criado um com header */
+	if ( fp == NULL )
+	{
+        fp = fopen(FILE_NAME, "w");
+        fprintf(fp, "%s", FILE_HEADER_STR);
+	}
+	else
+	{
+        fclose(fp);
+        fp = fopen(FILE_NAME, "a");
+	}
+
+    fprintf(fp, "\n%u,%d,%i,%d", index++, *data_, Device_Angle, Device_Angle_Direction);
+
+    /* Fecha o arquivo */
+	fclose(fp);
+}
+
+/*
+    APP__Init
+    Giordano C Moro
+    30/06/2020
+*/
+void APP__Init()
+{
+	/* Inicializa o KINECT */
+    KINECT__Init();
+}
+
+/*
+    APP__Thread
+    Giordano C Moro
+    08/07/2020
+*/
+void APP__Thread( void * arg )
+{
     /* Loop infinito */
     while ( Semi_Cycles < NUM_OF_SEMI_CYCLES )
     {
-        /* "Tira uma foto" */
-        //ret = freenect_sync_get_depth((void**)&depth, &timestamp, MY_KINECT_INDEX, FREENECT_DEPTH_11BIT);
-        if (ret < 0)
-        {
-            printf("\nProblem to take picture =(..");
-            fflush(stdout);
-            APP__Deinit();
-            exit(1);
-        }
-        else
-        {
-            /* Segue o baile */
-        }
+        /* Pega o valor da profundidade */
+        freenect_sync_get_depth((void **)&Depth, &Timestamp, MY_KINECT_INDEX, FREENECT_DEPTH_11BIT);
 
         /* Muda o ângulo de inclinação */
         if ( Device_Angle_Direction == KINECT_ANGLE_DIR_UP )
@@ -119,168 +183,17 @@ int main()
             }
         }
 
-        printf("\nÂngulo: (%d°) | Direção: (%s)", Device_Angle, (Device_Angle_Direction == KINECT_ANGLE_DIR_UP ? "subindo" : "descendo"));
+        printf("\nÂngulo: (%d°) | Direção: (%s) | Depth: (%d)", Device_Angle, (Device_Angle_Direction == KINECT_ANGLE_DIR_UP ? "subindo" : "descendo"), Depth[MIDDLE_POINT_OF_CAMERA]);
+        FILE__Write( &Depth[MIDDLE_POINT_OF_CAMERA] );
         fflush(stdout);
-        freenect_set_tilt_degs(fn_dvc, Device_Angle);
+        freenect_sync_set_tilt_degs(Device_Angle, MY_KINECT_INDEX);
 
         /* Espera o KINECT terminar o movimento */
         do
         {
-            freenect_update_tilt_state(fn_dvc);
-            Device_State = freenect_get_tilt_state(fn_dvc);
+            freenect_sync_get_tilt_state(&Device_State, MY_KINECT_INDEX);
         } while ( Device_State->tilt_status == TILT_STATUS_MOVING );
     }
-
-    /* Encerra o Kinect */
-    KINECT__Deinit();
-
-    printf("\n");
-    return EXIT_SUCCESS;
-}
-
-/*
-    KINECT__Init
-    Giordano C Moro
-    28/06/2020
-*/
-void KINECT__Init()
-{
-    int ret = 0;
-
-	/* Inicializa a biblioteca freenect */
-	ret = freenect_init(&fn_ctx, NULL);
-	if (ret < 0)
-	{
-        printf("\nfreenect_init failed!");
-        fflush(stdout);
-        exit(1);
-	}
-	else
-	{
-        printf("\nfreenect_init success!");
-        fflush(stdout);
-	}
-
-	/* Logs na tela para DEBUG, no momento */
-    //freenect_set_log_level(fn_ctx, FREENECT_LOG_DEBUG);
-
-    /* Seleciona os sub-dispositivos do KINECT */
-	freenect_select_subdevices(fn_ctx, (freenect_device_flags)(FREENECT_DEVICE_MOTOR | FREENECT_DEVICE_CAMERA));
-
-	/* ? */
-    ret = freenect_open_device(fn_ctx, &fn_dvc, MY_KINECT_INDEX);
-
-    if ( ret < 0 )
-    {
-        printf("\ncould not open the device!");
-        fflush(stdout);
-		freenect_shutdown(fn_ctx);
-        exit(1);
-    }
-    else
-    {
-        printf("\nopened the device successfully!");
-        fflush(stdout);
-    }
-
-    /* Sets iniciais */
-    freenect_set_tilt_degs(fn_dvc, INITIAL_KINECT_MOTOR_ANGLE);
-	freenect_set_led(fn_dvc, LED_GREEN);
-
-    /* Espera o KINECT terminar o movimento */
-    do
-    {
-        freenect_update_tilt_state(fn_dvc);
-        Device_State = freenect_get_tilt_state(fn_dvc);
-    } while ( Device_State->tilt_status == TILT_STATUS_MOVING );
-
-    /* Inicializa a parte de DEPTH do KINECT */
-	freenect_set_depth_callback(fn_dvc, KINECT__Depth_Callback);
-	freenect_set_depth_mode(fn_dvc, freenect_find_depth_mode(FREENECT_RESOLUTION_MEDIUM, FREENECT_DEPTH_11BIT));
-	freenect_start_depth(fn_dvc);
-}
-
-/*
-    KINECT__Depth_Callback
-    Giordano C Moro
-    30/06/2020
-*/
-void KINECT__Depth_Callback(freenect_device * dvc, void * v_depth, uint32_t timestamp)
-{
-    static uint8_t i = 0;
-    uint16_t * depth = (uint16_t *)v_depth;
-    float tmp = 0;
-
-    /* De acordo com <https://openkinect.org/wiki/Imaging_Information>, na seção Depth Camera */
-    tmp = (float)(100/((-0.00307 * (depth[640*480/2])) + 3.33));
-
-    FILE__Write( (float *)(&tmp) );
-
-    printf("\nEntrou CALLBACK %u vez(es) | depth: %f", (++i), tmp);
-    fflush(stdout);
-}
-
-/*
-    KINECT__Deinit
-    Giordano C Moro
-    28/06/2020
-*/
-void KINECT__Deinit()
-{
-    freenect_stop_depth(fn_dvc);
-    freenect_close_device(fn_dvc);
-    freenect_shutdown(fn_ctx);
-}
-
-
-/*
-    FILE__Write
-    Giordano C Moro
-    28/06/2020
-*/
-void FILE__Write( void * data )
-{
-	FILE * fp = NULL;           /* Criação e escrita em arquivo */
-	static uint32_t index = 0;
-	float * data_ = (float *)data;
-
-    /* Abre o arquivo para ler */
-	fp = fopen(FILE_NAME, "r");
-
-	/* Caso o arquivo não existe, é criado um com header */
-	if ( fp == NULL )
-	{
-        fp = fopen(FILE_NAME, "w");
-        fprintf(fp, "%s", FILE_HEADER_STR);
-	}
-	else
-	{
-        fclose(fp);
-        fp = fopen(FILE_NAME, "a");
-	}
-
-    fprintf(fp, "\n%u,%f,%i,%d", index++, *data_, Device_Angle, Device_Angle_Direction);
-
-    /* Fecha o arquivo */
-	fclose(fp);
-}
-
-/*
-    APP__Init
-    Giordano C Moro
-    30/06/2020
-*/
-void APP__Init()
-{
-
-    /* Alocando memória */
-	//depth = calloc(640*480, sizeof(uint8_t));
-
-	/* Faz ajuste para o comando "Ctrl + c" */
-	//signal(SIGINT, INThandler);
-
-	/* Inicializa o KINECT */
-    KINECT__Init();
 }
 
 /*
@@ -290,9 +203,6 @@ void APP__Init()
 */
 void APP__Deinit()
 {
-    /* Libera o ponteiro */
-    //free(depth);
-
     /* Desinicializa o KINECT */
-    KINECT__Deinit();
+    //KINECT__Deinit();
 }
